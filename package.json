@@ -14,6 +14,7 @@
   },
   "author": "rsomonte",
   "dependencies": {
+    "better-sqlite3": "^11.10.0",
     "discord-interactions": "^4.0.0",
     "dotenv": "^16.0.3",
     "express": "^4.18.2",

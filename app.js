@@ -7,18 +7,52 @@ import {
   verifyKeyMiddleware,
 } from 'discord-interactions';
 import fetch from 'node-fetch';
+import Database from 'better-sqlite3';
 
 // Create an express app
 const app = express();
-// Get port, or default to 3000
 const PORT = process.env.PORT || 3000;
-// Stores objectives for each user by their userId
-const userObjectives = {}; 
 
-/**
- * Interactions endpoint URL where Discord will send HTTP requests
- * Parse request body and verifies incoming requests using discord-interactions package
- */
+// --- SQLite setup ---
+const db = new Database('objectives.db');
+db.exec(`
+  CREATE TABLE IF NOT EXISTS objectives (
+    userId TEXT,
+    name TEXT,
+    frequency TEXT,
+    lastSubmitted INTEGER,
+    streak INTEGER,
+    lastStreakDay TEXT,
+    PRIMARY KEY (userId, name)
+  )
+`);
+
+// Helper functions
+function getObjectives(userId) {
+  return db.prepare('SELECT * FROM objectives WHERE userId = ?').all(userId);
+}
+function getObjective(userId, name) {
+  return db.prepare('SELECT * FROM objectives WHERE userId = ? AND name = ?').get(userId, name);
+}
+function upsertObjective(obj) {
+  db.prepare(`
+    INSERT INTO objectives (userId, name, frequency, lastSubmitted, streak, lastStreakDay)
+    VALUES (@userId, @name, @frequency, @lastSubmitted, @streak, @lastStreakDay)
+    ON CONFLICT(userId, name) DO UPDATE SET
+      frequency=excluded.frequency,
+      lastSubmitted=excluded.lastSubmitted,
+      streak=excluded.streak,
+      lastStreakDay=excluded.lastStreakDay
+  `).run(obj);
+}
+function createObjective(obj) {
+  db.prepare(`
+    INSERT INTO objectives (userId, name, frequency, lastSubmitted, streak, lastStreakDay)
+    VALUES (@userId, @name, @frequency, NULL, 0, NULL)
+  `).run(obj);
+}
+
+// --- Express route for interactions ---
 app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async function (req, res) {
   const { id, type, data } = req.body;
 
@@ -28,12 +62,6 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
 
   if (type === InteractionType.APPLICATION_COMMAND) {
     const { name } = data;
-
-    // "submit" command
-    /*      
-     * This command allows users to submit an image with a specific objective.
-     * The objective must match one that the user has created previously.
-     */
 
     if (name === 'submit') {
       const userId = req.body.member?.user?.id || req.body.user?.id;
@@ -80,9 +108,8 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
         });
       }
 
-      // Find the objective object since they can't be listed in the command options
-      const userObjs = userObjectives[userId] || [];
-      const obj = userObjs.find(o => o.name === objective);
+      // Find the objective object in the database
+      let obj = getObjective(userId, objective);
 
       if (!obj) {
         return res.send({
@@ -117,6 +144,32 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
       // Mark as submitted
       obj.lastSubmitted = now;
 
+      // Streak logic
+      const today = new Date();
+      const lastStreakDay = obj.lastStreakDay ? new Date(obj.lastStreakDay) : null;
+      let isConsecutive = false;
+      if (lastStreakDay) {
+        // Check if last streak day was yesterday (for daily), last week (for weekly), last month (for monthly)
+        if (obj.frequency === 'daily') {
+          const diff = Math.floor((today - lastStreakDay) / (24 * 60 * 60 * 1000));
+          isConsecutive = diff === 1;
+        } else if (obj.frequency === 'weekly') {
+          const diff = Math.floor((today - lastStreakDay) / (7 * 24 * 60 * 60 * 1000));
+          isConsecutive = diff === 1;
+        } else if (obj.frequency === 'monthly') {
+          isConsecutive = (today.getMonth() === lastStreakDay.getMonth() + 1) &&
+                          (today.getFullYear() === lastStreakDay.getFullYear());
+        }
+      }
+      if (isConsecutive) {
+        obj.streak = (obj.streak || 0) + 1;
+      } else {
+        obj.streak = 1;
+      }
+      obj.lastStreakDay = today.toISOString().split('T')[0]; // Store as YYYY-MM-DD
+
+      upsertObjective(obj);
+
       // Calculate next allowed submission time
       if (obj.frequency === 'daily') nextAllowed = obj.lastSubmitted + 24 * 60 * 60 * 1000;
       if (obj.frequency === 'weekly') nextAllowed = obj.lastSubmitted + 7 * 24 * 60 * 60 * 1000;
@@ -129,7 +182,8 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
         data: {
           embeds: [
             {
-              description: `Objective '${objective}' completed!`,
+              description: `Objective '${objective}' completed!` +
+                (obj.streak > 3 ? `\nStreak: ${obj.streak} 🔥` : ''),
               image: { url: attachment.url },
             },
             {
@@ -166,11 +220,21 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
         });
       }
 
-      if (!userObjectives[userId]) userObjectives[userId] = [];
-      userObjectives[userId].push({
+      // Check if already exists
+      if (getObjective(userId, objectiveName)) {
+        return res.send({
+          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+          data: {
+            content: `Objective "${objectiveName}" already exists.`,
+            flags: InteractionResponseFlags.EPHEMERAL,
+          },
+        });
+      }
+
+      createObjective({
+        userId,
         name: objectiveName,
         frequency,
-        lastSubmitted: null,
       });
 
       return res.send({
@@ -190,111 +254,52 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
     */
     if (name === 'list_objectives') {
       const userId = req.body.member?.user?.id || req.body.user?.id;
-      const objectives = userObjectives[userId] || [];
+      const objectives = getObjectives(userId);
       if (objectives.length === 0) {
-      return res.send({
-        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-        data: {
-        content: 'You have no objectives.',
-        flags: InteractionResponseFlags.EPHEMERAL,
-        },
-      });
+        return res.send({
+          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+          data: {
+            content: 'You have no objectives.',
+            flags: InteractionResponseFlags.EPHEMERAL,
+          },
+        });
       }
       const now = Date.now();
       const lines = objectives.map(obj => {
-      let nextAllowed = 0;
-      if (obj.lastSubmitted) {
-        if (obj.frequency === 'daily') nextAllowed = obj.lastSubmitted + 24 * 60 * 60 * 1000;
-        if (obj.frequency === 'weekly') nextAllowed = obj.lastSubmitted + 7 * 24 * 60 * 60 * 1000;
-        if (obj.frequency === 'monthly') nextAllowed = obj.lastSubmitted + 30 * 24 * 60 * 60 * 1000;
-      }
-      let timeStr = '';
-      if (!obj.lastSubmitted) {
-        timeStr = 'Available now';
-      } else if (now >= nextAllowed) {
-        timeStr = 'Available now';
-      } else {
-        timeStr = `<t:${Math.floor(nextAllowed / 1000)}:R>`;
-      }
-      return `- *${obj.name}* (${obj.frequency}) - ${timeStr}`;
+        let nextAllowed = 0;
+        if (obj.lastSubmitted) {
+          if (obj.frequency === 'daily') nextAllowed = obj.lastSubmitted + 24 * 60 * 60 * 1000;
+          if (obj.frequency === 'weekly') nextAllowed = obj.lastSubmitted + 7 * 24 * 60 * 60 * 1000;
+          if (obj.frequency === 'monthly') nextAllowed = obj.lastSubmitted + 30 * 24 * 60 * 60 * 1000;
+        }
+        let timeStr = '';
+        if (!obj.lastSubmitted) {
+          timeStr = 'Available now';
+        } else if (now >= nextAllowed) {
+          timeStr = 'Available now';
+        } else {
+          timeStr = `<t:${Math.floor(nextAllowed / 1000)}:R>`;
+        }
+        return `- *${obj.name}* (${obj.frequency}) - ${timeStr}` +
+          (obj.streak > 3 ? ` | Streak: ${obj.streak} 🔥` : '');
       });
       return res.send({
-      type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-      data: {
-        content: `Your objectives:\n${lines.join('\n')}`,
-        flags: InteractionResponseFlags.EPHEMERAL,
-      },
+        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+        data: {
+          content: `Your objectives:\n${lines.join('\n')}`,
+          flags: InteractionResponseFlags.EPHEMERAL,
+        },
       });
     }
 
-    console.error(`unknown command: ${name}`);
-    return res.status(400).json({ error: 'unknown command' });
+    console.error(`unknown command type: ${type}`);
+    return res.sendStatus(400);
   }
 
-  console.error('unknown interaction type', type);
-  return res.status(400).json({ error: 'unknown interaction type' });
+  res.sendStatus(404);
 });
 
-// Helper to send a DM to a user
-/*
-  * This function sends a direct message to a user when they need to be notified about their objectives.
-  * It creates a DM channel if it doesn't exist and sends the content.
-  * @param {string} userId - The ID of the user to send the DM to.
-  * @param {string} content - The content of the message to send.
-  * @return {Promise<void>} - A promise that resolves when the message is sent.
-  * @throws {Error} - Throws an error if the DM channel creation or message sending fails.
-*/
-async function sendDM(userId, content) {
-  // Create DM channel
-  const dmRes = await fetch('https://discord.com/api/v10/users/@me/channels', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bot ${process.env.DISCORD_TOKEN}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ recipient_id: userId }),
-  });
-  const dmChannel = await dmRes.json();
-  // Send message
-  await fetch(`https://discord.com/api/v10/channels/${dmChannel.id}/messages`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bot ${process.env.DISCORD_TOKEN}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ content }),
-  });
-}
-
-// Periodic check every 10 minutes
-/*  
-  * This function runs every 10 minutes to check if any user has not submitted their objectives
-  * for more than 36 hours since they became available.
-  * If so, it sends a DM to the user reminding them to submit their objective.
-*/
-setInterval(async () => {
-  const now = Date.now();
-  for (const [userId, objectives] of Object.entries(userObjectives)) {
-    for (const obj of objectives) {
-      if (!obj.lastSubmitted) continue;
-      let nextAllowed = 0;
-      if (obj.frequency === 'daily') nextAllowed = obj.lastSubmitted + 24 * 60 * 60 * 1000;
-      if (obj.frequency === 'weekly') nextAllowed = obj.lastSubmitted + 7 * 24 * 60 * 60 * 1000;
-      if (obj.frequency === 'monthly') nextAllowed = obj.lastSubmitted + 30 * 24 * 60 * 60 * 1000;
-      // If the window has been open for more than 36 hours and not submitted
-      if (now > nextAllowed + 36 * 60 * 60 * 1000 && (!obj.notified || obj.notified < nextAllowed)) {
-        // Send DM
-        await sendDM(
-          userId,
-          `You haven't submitted your objective "${obj.name}" for more than 36 hours since it became available!`
-        );
-        // Mark as notified so we don't spam
-        obj.notified = now;
-      }
-    }
-  }
-}, 10 * 60 * 1000); // every 10 minutes
-
+// Start the server
 app.listen(PORT, () => {
-  console.log('Listening on port', PORT);
+  console.log(`Server is running on port ${PORT}`);
 });
