@@ -29,6 +29,12 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
   if (type === InteractionType.APPLICATION_COMMAND) {
     const { name } = data;
 
+    // "submit" command
+    /*      
+     * This command allows users to submit an image with a specific objective.
+     * The objective must match one that the user has created previously.
+     */
+
     if (name === 'submit') {
       const userId = req.body.member?.user?.id || req.body.user?.id;
       const imageOption = data.options.find(opt => opt.name === 'image');
@@ -74,7 +80,7 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
         });
       }
 
-      // Find the objective object
+      // Find the objective object since they can't be listed in the command options
       const userObjs = userObjectives[userId] || [];
       const obj = userObjs.find(o => o.name === objective);
 
@@ -134,7 +140,15 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
       });
     }
 
+
+
     // "create_objective" command
+
+    /*
+      * This command allows users to create a new objective.
+      * Users can specify the name and frequency of the objective.
+      * The created objective is stored in memory for the user.
+    */
     if (name === 'create_objective') {
       const userId = req.body.member?.user?.id || req.body.user?.id;
       const nameOption = data.options.find(opt => opt.name === 'name');
@@ -169,25 +183,47 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
     }
 
     // "list_objectives" command
+    /*
+      * This command allows users to list their objectives.
+      * It does not require any options.
+      * Returns a list of objectives the user has created with the time remaining until they can be submitted again.
+    */
     if (name === 'list_objectives') {
       const userId = req.body.member?.user?.id || req.body.user?.id;
       const objectives = userObjectives[userId] || [];
       if (objectives.length === 0) {
-        return res.send({
-          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-          data: {
-            content: 'You have no objectives.',
-            flags: InteractionResponseFlags.EPHEMERAL,
-          },
-        });
-      }
-      const lines = objectives.map(obj => `• **${obj.name}** (${obj.frequency})`);
       return res.send({
         type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
         data: {
-          content: `Your objectives:\n${lines.join('\n')}`,
-          flags: InteractionResponseFlags.EPHEMERAL,
+        content: 'You have no objectives.',
+        flags: InteractionResponseFlags.EPHEMERAL,
         },
+      });
+      }
+      const now = Date.now();
+      const lines = objectives.map(obj => {
+      let nextAllowed = 0;
+      if (obj.lastSubmitted) {
+        if (obj.frequency === 'daily') nextAllowed = obj.lastSubmitted + 24 * 60 * 60 * 1000;
+        if (obj.frequency === 'weekly') nextAllowed = obj.lastSubmitted + 7 * 24 * 60 * 60 * 1000;
+        if (obj.frequency === 'monthly') nextAllowed = obj.lastSubmitted + 30 * 24 * 60 * 60 * 1000;
+      }
+      let timeStr = '';
+      if (!obj.lastSubmitted) {
+        timeStr = 'Available now';
+      } else if (now >= nextAllowed) {
+        timeStr = 'Available now';
+      } else {
+        timeStr = `<t:${Math.floor(nextAllowed / 1000)}:R>`;
+      }
+      return `- *${obj.name}* (${obj.frequency}) - ${timeStr}`;
+      });
+      return res.send({
+      type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+      data: {
+        content: `Your objectives:\n${lines.join('\n')}`,
+        flags: InteractionResponseFlags.EPHEMERAL,
+      },
       });
     }
 
@@ -200,6 +236,14 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
 });
 
 // Helper to send a DM to a user
+/*
+  * This function sends a direct message to a user when they need to be notified about their objectives.
+  * It creates a DM channel if it doesn't exist and sends the content.
+  * @param {string} userId - The ID of the user to send the DM to.
+  * @param {string} content - The content of the message to send.
+  * @return {Promise<void>} - A promise that resolves when the message is sent.
+  * @throws {Error} - Throws an error if the DM channel creation or message sending fails.
+*/
 async function sendDM(userId, content) {
   // Create DM channel
   const dmRes = await fetch('https://discord.com/api/v10/users/@me/channels', {
@@ -223,6 +267,11 @@ async function sendDM(userId, content) {
 }
 
 // Periodic check every 10 minutes
+/*  
+  * This function runs every 10 minutes to check if any user has not submitted their objectives
+  * for more than 36 hours since they became available.
+  * If so, it sends a DM to the user reminding them to submit their objective.
+*/
 setInterval(async () => {
   const now = Date.now();
   for (const [userId, objectives] of Object.entries(userObjectives)) {
