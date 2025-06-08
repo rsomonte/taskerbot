@@ -14,7 +14,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // --- SQLite setup ---
-const db = new Database('objectives.db');
+const db = new Database('./data/objectives.db');
 db.exec(`
   CREATE TABLE IF NOT EXISTS objectives (
     userId TEXT,
