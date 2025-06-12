@@ -63,7 +63,7 @@ Delete one of your objectives forever.
 
 ## Add Tasker Bot to Your Server
 
-You can add Tasker Bot to your Discord server or apps section and start using these commands right away!
+You can [add Tasker Bot](https://discord.com/oauth2/authorize?client_id=1378919723189932124) to your Discord server or apps section and start using these commands right away!
 
 ---
 
