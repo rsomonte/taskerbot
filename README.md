@@ -14,7 +14,7 @@ Create a new objective for yourself.
   - `monthly`
 
 **Example:**  
-`/create_objective name: "Read a book" frequency: daily`
+![](https://i.imgur.com/Z936pXa.gif)
 
 ---
 
@@ -25,7 +25,7 @@ Submit an image as proof of completing an objective.
 - `objective` (string, required): The name of the objective you are submitting for (must match an objective you created).
 
 **Example:**  
-`/submit image: [upload file] objective: "Read a book"`
+![](https://i.imgur.com/Qkx7Qvj.gif)
 
 - The bot will enforce the frequency you set for each objective.
 - If you try to submit too soon, it will tell you when you can submit again.
@@ -37,7 +37,7 @@ Submit an image as proof of completing an objective.
 List all your current objectives, including their frequency, streaks, and when you can next submit.
 
 **Example:**  
-`/list_objectives`
+![](https://i.imgur.com/ANsLTEk.gif)
 
 ---
 
@@ -47,7 +47,7 @@ Delete one of your objectives forever.
 - `name` (string, required): The name of the objective you want to delete.
 
 **Example:**  
-`/delete_objective name: "Read a book"`
+![](https://i.imgur.com/Oi7NVT7.gif)
 
 ---
 
