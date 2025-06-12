@@ -25,7 +25,7 @@ Submit an image as proof of completing an objective.
 - `objective` (string, required): The name of the objective you are submitting for (must match an objective you created).
 
 **Example:**  
-![](https://i.imgur.com/Qkx7Qvj.gif)
+![](https://i.imgur.com/UAbUQ28.gif)
 
 - The bot will enforce the frequency you set for each objective.
 - If you try to submit too soon, it will tell you when you can submit again.
