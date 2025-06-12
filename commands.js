@@ -104,6 +104,32 @@ const LIST_OBJECTIVES_COMMAND = {
   contexts: [0, 1, 2],
 };
 
-const ALL_COMMANDS = [SUBMIT_COMMAND, CREATE_OBJECTIVE_COMMAND, LIST_OBJECTIVES_COMMAND];
+
+/**
+ * This command allows users to delete an objective.
+ * Users must specify the name of the objective they want to delete.
+ */
+const DELETE_OBJECTIVE_COMMAND = {
+  name: 'delete_objective',
+  description: 'Delete one of your objectives forever',
+  options: [
+    {
+      type: 3, // STRING
+      name: 'name',
+      description: 'Objective name to delete',
+      required: true,
+    },
+  ],
+  type: 1,
+  integration_types: [0, 1],
+  contexts: [0, 1, 2],
+};
+
+const ALL_COMMANDS = [
+  SUBMIT_COMMAND,
+  CREATE_OBJECTIVE_COMMAND,
+  LIST_OBJECTIVES_COMMAND,
+  DELETE_OBJECTIVE_COMMAND, 
+];
 
 InstallGlobalCommands(process.env.APP_ID, ALL_COMMANDS);

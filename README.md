@@ -41,12 +41,23 @@ List all your current objectives, including their frequency, streaks, and when y
 
 ---
 
+### `/delete_objective`
+Delete one of your objectives forever.  
+**Options:**
+- `name` (string, required): The name of the objective you want to delete.
+
+**Example:**  
+`/delete_objective name: "Read a book"`
+
+---
+
 ## Features
 
 - **Personal Objectives:** Each user can create and manage their own objectives.
 - **Submission Limits:** Objectives can be submitted daily, weekly, or monthly.
 - **Streak Tracking:** Keep track of your consecutive completions for extra motivation.
 - **Image Proof:** Require an image as evidence for each submission.
+- **Permanent Deletion:** Remove objectives you no longer want to track.
 
 ---
 

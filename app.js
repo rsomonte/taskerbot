@@ -52,6 +52,11 @@ function createObjective(obj) {
   `).run(obj);
 }
 
+// Helper to delete an objective
+function deleteObjective(userId, name) {
+  db.prepare('DELETE FROM objectives WHERE userId = ? AND name = ?').run(userId, name);
+}
+
 // --- Express route for interactions ---
 app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async function (req, res) {
   const { id, type, data } = req.body;
@@ -296,6 +301,48 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
         type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
         data: {
           content: `Your objectives:\n${lines.join('\n')}`,
+          flags: InteractionResponseFlags.EPHEMERAL,
+        },
+      });
+    }
+
+    // "delete_objective" command
+    /*
+      * This command allows users to delete an objective.
+      * Users must specify the name of the objective they want to delete.
+      * The objective will be permanently removed from the database.
+    */
+    if (name === 'delete_objective') {
+      const userId = req.body.member?.user?.id || req.body.user?.id;
+      const nameOption = data.options.find(opt => opt.name === 'name');
+      const objectiveName = nameOption?.value?.trim();
+
+      if (!objectiveName) {
+        return res.send({
+          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+          data: {
+            content: 'Objective name is required.',
+            flags: InteractionResponseFlags.EPHEMERAL,
+          },
+        });
+      }
+
+      if (!getObjective(userId, objectiveName)) {
+        return res.send({
+          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+          data: {
+            content: `Objective "${objectiveName}" not found.`,
+            flags: InteractionResponseFlags.EPHEMERAL,
+          },
+        });
+      }
+
+      deleteObjective(userId, objectiveName);
+
+      return res.send({
+        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+        data: {
+          content: `Objective "${objectiveName}" has been deleted forever.`,
           flags: InteractionResponseFlags.EPHEMERAL,
         },
       });
