@@ -125,9 +125,18 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
       const now = Date.now();
       let nextAllowed = 0;
       if (obj.lastSubmitted) {
-        if (obj.frequency === 'daily') nextAllowed = obj.lastSubmitted + 24 * 60 * 60 * 1000;
-        if (obj.frequency === 'weekly') nextAllowed = obj.lastSubmitted + 7 * 24 * 60 * 60 * 1000;
-        if (obj.frequency === 'monthly') nextAllowed = obj.lastSubmitted + 30 * 24 * 60 * 60 * 1000;
+        if (obj.frequency === 'daily') {
+          // Allow submission after 22 hours (22 * 60 * 60 * 1000 ms)
+          nextAllowed = obj.lastSubmitted + 22 * 60 * 60 * 1000;
+        }
+        if (obj.frequency === 'weekly') {
+          // Allow submission 6 hours earlier than 7 days (7*24-6 = 162 hours)
+          nextAllowed = obj.lastSubmitted + (7 * 24 - 6) * 60 * 60 * 1000;
+        }
+        if (obj.frequency === 'monthly') {
+          // Allow submission 6 hours earlier than 30 days (30*24-6 = 714 hours)
+          nextAllowed = obj.lastSubmitted + (30 * 24 - 6) * 60 * 60 * 1000;
+        }
         if (now < nextAllowed) {
           // Discord timestamp: <t:unix:relative>
           const discordTs = `<t:${Math.floor(nextAllowed / 1000)}:R>`;
@@ -170,10 +179,10 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
 
       upsertObjective(obj);
 
-      // Calculate next allowed submission time
-      if (obj.frequency === 'daily') nextAllowed = obj.lastSubmitted + 24 * 60 * 60 * 1000;
-      if (obj.frequency === 'weekly') nextAllowed = obj.lastSubmitted + 7 * 24 * 60 * 60 * 1000;
-      if (obj.frequency === 'monthly') nextAllowed = obj.lastSubmitted + 30 * 24 * 60 * 60 * 1000;
+      // Calculate next allowed submission time for response
+      if (obj.frequency === 'daily') nextAllowed = obj.lastSubmitted + 22 * 60 * 60 * 1000;
+      if (obj.frequency === 'weekly') nextAllowed = obj.lastSubmitted + (7 * 24 - 6) * 60 * 60 * 1000;
+      if (obj.frequency === 'monthly') nextAllowed = obj.lastSubmitted + (30 * 24 - 6) * 60 * 60 * 1000;
       const discordTs = `<t:${Math.floor(nextAllowed / 1000)}:R>`;
       const userMention = `<@${userId}>`;
 
@@ -268,9 +277,9 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
       const lines = objectives.map(obj => {
         let nextAllowed = 0;
         if (obj.lastSubmitted) {
-          if (obj.frequency === 'daily') nextAllowed = obj.lastSubmitted + 24 * 60 * 60 * 1000;
-          if (obj.frequency === 'weekly') nextAllowed = obj.lastSubmitted + 7 * 24 * 60 * 60 * 1000;
-          if (obj.frequency === 'monthly') nextAllowed = obj.lastSubmitted + 30 * 24 * 60 * 60 * 1000;
+          if (obj.frequency === 'daily') nextAllowed = obj.lastSubmitted + 22 * 60 * 60 * 1000;
+          if (obj.frequency === 'weekly') nextAllowed = obj.lastSubmitted + (7 * 24 - 6) * 60 * 60 * 1000;
+          if (obj.frequency === 'monthly') nextAllowed = obj.lastSubmitted + (30 * 24 - 6) * 60 * 60 * 1000;
         }
         let timeStr = '';
         if (!obj.lastSubmitted) {
