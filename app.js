@@ -8,8 +8,16 @@ import {
 } from 'discord-interactions';
 import fetch from 'node-fetch';
 import Database from 'better-sqlite3';
+import { Client, GatewayIntentBits, Partials } from 'discord.js';
 
-// Create an express app
+// --- Discord.js client for DMs ---
+const botClient = new Client({
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.DirectMessages],
+  partials: [Partials.Channel],
+});
+botClient.login(process.env.BOT_TOKEN);
+
+// --- Express app setup ---
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -23,6 +31,7 @@ db.exec(`
     lastSubmitted INTEGER,
     streak INTEGER,
     lastStreakDay TEXT,
+    lastReminded INTEGER,
     PRIMARY KEY (userId, name)
   )
 `);
@@ -36,19 +45,20 @@ function getObjective(userId, name) {
 }
 function upsertObjective(obj) {
   db.prepare(`
-    INSERT INTO objectives (userId, name, frequency, lastSubmitted, streak, lastStreakDay)
-    VALUES (@userId, @name, @frequency, @lastSubmitted, @streak, @lastStreakDay)
+    INSERT INTO objectives (userId, name, frequency, lastSubmitted, streak, lastStreakDay, lastReminded)
+    VALUES (@userId, @name, @frequency, @lastSubmitted, @streak, @lastStreakDay, @lastReminded)
     ON CONFLICT(userId, name) DO UPDATE SET
       frequency=excluded.frequency,
       lastSubmitted=excluded.lastSubmitted,
       streak=excluded.streak,
-      lastStreakDay=excluded.lastStreakDay
+      lastStreakDay=excluded.lastStreakDay,
+      lastReminded=excluded.lastReminded
   `).run(obj);
 }
 function createObjective(obj) {
   db.prepare(`
-    INSERT INTO objectives (userId, name, frequency, lastSubmitted, streak, lastStreakDay)
-    VALUES (@userId, @name, @frequency, NULL, 0, NULL)
+    INSERT INTO objectives (userId, name, frequency, lastSubmitted, streak, lastStreakDay, lastReminded)
+    VALUES (@userId, @name, @frequency, NULL, 0, NULL, NULL)
   `).run(obj);
 }
 
@@ -56,6 +66,35 @@ function createObjective(obj) {
 function deleteObjective(userId, name) {
   db.prepare('DELETE FROM objectives WHERE userId = ? AND name = ?').run(userId, name);
 }
+
+// --- 24h Reminder Job ---
+setInterval(async () => {
+  const now = Date.now();
+  const cutoff = now - 24 * 60 * 60 * 1000; // 24 hours in ms
+
+  // Find objectives not submitted in the last 24h and not reminded in the last 24h
+  const staleObjectives = db.prepare(`
+    SELECT * FROM objectives
+    WHERE (lastSubmitted IS NULL OR lastSubmitted < ?)
+      AND (lastReminded IS NULL OR lastReminded < ?)
+  `).all(cutoff, cutoff);
+
+  for (const obj of staleObjectives) {
+    try {
+      const user = await botClient.users.fetch(obj.userId);
+      if (user) {
+        await user.send(
+          `⏰ Reminder: You haven't submitted your objective "**${obj.name}**" in the last 24 hours. Don't forget to keep your streak going!`
+        );
+        db.prepare(
+          `UPDATE objectives SET lastReminded = ? WHERE userId = ? AND name = ?`
+        ).run(now, obj.userId, obj.name);
+      }
+    } catch (err) {
+      console.error(`Failed to send DM to user ${obj.userId}:`, err);
+    }
+  }
+}, 60 * 60 * 1000); // Check every hour
 
 // --- Express route for interactions ---
 app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async function (req, res) {
