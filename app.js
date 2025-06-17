@@ -6,7 +6,6 @@ import {
   InteractionType,
   verifyKeyMiddleware,
 } from 'discord-interactions';
-import fetch from 'node-fetch';
 import Database from 'better-sqlite3';
 import { Client, GatewayIntentBits, Partials } from 'discord.js';
 
@@ -36,7 +35,8 @@ db.exec(`
   )
 `);
 
-// Helper functions
+// --- Helper functions ---
+
 function getObjectives(userId) {
   return db.prepare('SELECT * FROM objectives WHERE userId = ?').all(userId);
 }
@@ -61,37 +61,69 @@ function createObjective(obj) {
     VALUES (@userId, @name, @frequency, NULL, 0, NULL, NULL)
   `).run(obj);
 }
-
-// Helper to delete an objective
 function deleteObjective(userId, name) {
   db.prepare('DELETE FROM objectives WHERE userId = ? AND name = ?').run(userId, name);
+}
+
+/**
+ * Returns the next allowed submission timestamp for an objective.
+ * @param {object} obj - The objective object from the DB.
+ * @returns {number} - Timestamp in ms when the window opens.
+ */
+function getNextAllowedTime(obj) {
+  if (!obj.lastSubmitted) return Date.now(); // Window is open now if never submitted
+  if (obj.frequency === 'daily') {
+    return obj.lastSubmitted + 22 * 60 * 60 * 1000;
+  }
+  if (obj.frequency === 'weekly') {
+    return obj.lastSubmitted + (7 * 24 - 6) * 60 * 60 * 1000;
+  }
+  if (obj.frequency === 'monthly') {
+    return obj.lastSubmitted + (30 * 24 - 6) * 60 * 60 * 1000;
+  }
+  return Date.now();
+}
+
+// Helper for ephemeral error responses
+function sendEphemeral(res, content) {
+  return res.send({
+    type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+    data: {
+      content,
+      flags: InteractionResponseFlags.EPHEMERAL,
+    },
+  });
 }
 
 // --- 24h Reminder Job ---
 setInterval(async () => {
   const now = Date.now();
-  const cutoff = now - 24 * 60 * 60 * 1000; // 24 hours in ms
+  const objectives = db.prepare(`SELECT * FROM objectives`).all();
 
-  // Find objectives not submitted in the last 24h and not reminded in the last 24h
-  const staleObjectives = db.prepare(`
-    SELECT * FROM objectives
-    WHERE (lastSubmitted IS NULL OR lastSubmitted < ?)
-      AND (lastReminded IS NULL OR lastReminded < ?)
-  `).all(cutoff, cutoff);
+  for (const obj of objectives) {
+    const windowOpen = getNextAllowedTime(obj);
 
-  for (const obj of staleObjectives) {
-    try {
-      const user = await botClient.users.fetch(obj.userId);
-      if (user) {
-        await user.send(
-          `⏰ Reminder: You haven't submitted your objective "**${obj.name}**" in the last 24 hours. Don't forget to keep your streak going!`
-        );
-        db.prepare(
-          `UPDATE objectives SET lastReminded = ? WHERE userId = ? AND name = ?`
-        ).run(now, obj.userId, obj.name);
+    // Only remind if:
+    // - The window has been open for more than 24h
+    // - The user hasn't been reminded since the window opened
+    // - The user hasn't submitted since the window opened
+    if (
+      now > windowOpen + 24 * 60 * 60 * 1000 &&
+      (!obj.lastReminded || obj.lastReminded < windowOpen)
+    ) {
+      try {
+        const user = await botClient.users.fetch(obj.userId);
+        if (user) {
+          await user.send(
+            `⏰ Reminder: You haven't submitted your objective "**${obj.name}**" since it became available over 24 hours ago. Don't forget to keep your streak going!`
+          );
+          db.prepare(
+            `UPDATE objectives SET lastReminded = ? WHERE userId = ? AND name = ?`
+          ).run(now, obj.userId, obj.name);
+        }
+      } catch (err) {
+        console.error(`Failed to send DM to user ${obj.userId}:`, err);
       }
-    } catch (err) {
-      console.error(`Failed to send DM to user ${obj.userId}:`, err);
     }
   }
 }, 60 * 60 * 1000); // Check every hour
@@ -125,73 +157,28 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
 
       // Error handling
       if (!attachment && !objective) {
-        return res.send({
-          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-          data: {
-            content: 'Missing both image and objective.',
-            flags: InteractionResponseFlags.EPHEMERAL,
-          },
-        });
+        return sendEphemeral(res, 'Missing both image and objective.');
       }
       if (!attachment) {
-        return res.send({
-          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-          data: {
-            content: 'Missing image.',
-            flags: InteractionResponseFlags.EPHEMERAL,
-          },
-        });
+        return sendEphemeral(res, 'Missing image.');
       }
       if (!objective) {
-        return res.send({
-          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-          data: {
-            content: 'Missing objective.',
-            flags: InteractionResponseFlags.EPHEMERAL,
-          },
-        });
+        return sendEphemeral(res, 'Missing objective.');
       }
 
       // Find the objective object in the database
       let obj = getObjective(userId, objective);
 
       if (!obj) {
-        return res.send({
-          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-          data: {
-            content: `Objective "${objective}" not found. Please create it first with /create_objective.`,
-            flags: InteractionResponseFlags.EPHEMERAL,
-          },
-        });
+        return sendEphemeral(res, `Objective "${objective}" not found. Please create it first with /create_objective.`);
       }
 
       // Frequency check
       const now = Date.now();
-      let nextAllowed = 0;
-      if (obj.lastSubmitted) {
-        if (obj.frequency === 'daily') {
-          // Allow submission after 22 hours (22 * 60 * 60 * 1000 ms)
-          nextAllowed = obj.lastSubmitted + 22 * 60 * 60 * 1000;
-        }
-        if (obj.frequency === 'weekly') {
-          // Allow submission 6 hours earlier than 7 days (7*24-6 = 162 hours)
-          nextAllowed = obj.lastSubmitted + (7 * 24 - 6) * 60 * 60 * 1000;
-        }
-        if (obj.frequency === 'monthly') {
-          // Allow submission 6 hours earlier than 30 days (30*24-6 = 714 hours)
-          nextAllowed = obj.lastSubmitted + (30 * 24 - 6) * 60 * 60 * 1000;
-        }
-        if (now < nextAllowed) {
-          // Discord timestamp: <t:unix:relative>
-          const discordTs = `<t:${Math.floor(nextAllowed / 1000)}:R>`;
-          return res.send({
-            type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-            data: {
-              content: `You have already submitted **${objective}**. Try again ${discordTs}.`,
-              flags: InteractionResponseFlags.EPHEMERAL,
-            },
-          });
-        }
+      const nextAllowed = getNextAllowedTime(obj);
+      if (obj.lastSubmitted && now < nextAllowed) {
+        const discordTs = `<t:${Math.floor(nextAllowed / 1000)}:R>`;
+        return sendEphemeral(res, `You have already submitted **${objective}**. Try again ${discordTs}.`);
       }
 
       // Mark as submitted
@@ -223,11 +210,9 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
 
       upsertObjective(obj);
 
-      // Calculate next allowed submission time for response
-      if (obj.frequency === 'daily') nextAllowed = obj.lastSubmitted + 22 * 60 * 60 * 1000;
-      if (obj.frequency === 'weekly') nextAllowed = obj.lastSubmitted + (7 * 24 - 6) * 60 * 60 * 1000;
-      if (obj.frequency === 'monthly') nextAllowed = obj.lastSubmitted + (30 * 24 - 6) * 60 * 60 * 1000;
-      const discordTs = `<t:${Math.floor(nextAllowed / 1000)}:R>`;
+      // Calculate next allowed submission time for response (AFTER updating lastSubmitted)
+      const nextAllowedAfter = getNextAllowedTime(obj);
+      const discordTs = `<t:${Math.floor(nextAllowedAfter / 1000)}:R>`;
       const userMention = `<@${userId}>`;
 
       return res.send({
@@ -247,15 +232,7 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
       });
     }
 
-
-
     // "create_objective" command
-
-    /*
-      * This command allows users to create a new objective.
-      * Users can specify the name and frequency of the objective.
-      * The created objective is stored in memory for the user.
-    */
     if (name === 'create_objective') {
       const userId = req.body.member?.user?.id || req.body.user?.id;
       const nameOption = data.options.find(opt => opt.name === 'name');
@@ -264,24 +241,12 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
       const frequency = freqOption?.value;
 
       if (!objectiveName || !frequency) {
-        return res.send({
-          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-          data: {
-            content: 'Objective name and frequency are required.',
-            flags: InteractionResponseFlags.EPHEMERAL,
-          },
-        });
+        return sendEphemeral(res, 'Objective name and frequency are required.');
       }
 
       // Check if already exists
       if (getObjective(userId, objectiveName)) {
-        return res.send({
-          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-          data: {
-            content: `Objective "${objectiveName}" already exists.`,
-            flags: InteractionResponseFlags.EPHEMERAL,
-          },
-        });
+        return sendEphemeral(res, `Objective "${objectiveName}" already exists.`);
       }
 
       createObjective({
@@ -290,41 +255,19 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
         frequency,
       });
 
-      return res.send({
-        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-        data: {
-          content: `Objective "${objectiveName}" (${frequency}) created!`,
-          flags: InteractionResponseFlags.EPHEMERAL,
-        },
-      });
+      return sendEphemeral(res, `Objective "${objectiveName}" (${frequency}) created!`);
     }
 
     // "list_objectives" command
-    /*
-      * This command allows users to list their objectives.
-      * It does not require any options.
-      * Returns a list of objectives the user has created with the time remaining until they can be submitted again.
-    */
     if (name === 'list_objectives') {
       const userId = req.body.member?.user?.id || req.body.user?.id;
       const objectives = getObjectives(userId);
       if (objectives.length === 0) {
-        return res.send({
-          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-          data: {
-            content: 'You have no objectives.',
-            flags: InteractionResponseFlags.EPHEMERAL,
-          },
-        });
+        return sendEphemeral(res, 'You have no objectives.');
       }
       const now = Date.now();
       const lines = objectives.map(obj => {
-        let nextAllowed = 0;
-        if (obj.lastSubmitted) {
-          if (obj.frequency === 'daily') nextAllowed = obj.lastSubmitted + 22 * 60 * 60 * 1000;
-          if (obj.frequency === 'weekly') nextAllowed = obj.lastSubmitted + (7 * 24 - 6) * 60 * 60 * 1000;
-          if (obj.frequency === 'monthly') nextAllowed = obj.lastSubmitted + (30 * 24 - 6) * 60 * 60 * 1000;
-        }
+        const nextAllowed = getNextAllowedTime(obj);
         let timeStr = '';
         if (!obj.lastSubmitted) {
           timeStr = 'Available now';
@@ -336,55 +279,26 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
         return `- *${obj.name}* (${obj.frequency}) - ${timeStr}` +
           (obj.streak > 3 ? ` | Streak: ${obj.streak} 🔥` : '');
       });
-      return res.send({
-        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-        data: {
-          content: `Your objectives:\n${lines.join('\n')}`,
-          flags: InteractionResponseFlags.EPHEMERAL,
-        },
-      });
+      return sendEphemeral(res, `Your objectives:\n${lines.join('\n')}`);
     }
 
     // "delete_objective" command
-    /*
-      * This command allows users to delete an objective.
-      * Users must specify the name of the objective they want to delete.
-      * The objective will be permanently removed from the database.
-    */
     if (name === 'delete_objective') {
       const userId = req.body.member?.user?.id || req.body.user?.id;
       const nameOption = data.options.find(opt => opt.name === 'name');
       const objectiveName = nameOption?.value?.trim();
 
       if (!objectiveName) {
-        return res.send({
-          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-          data: {
-            content: 'Objective name is required.',
-            flags: InteractionResponseFlags.EPHEMERAL,
-          },
-        });
+        return sendEphemeral(res, 'Objective name is required.');
       }
 
       if (!getObjective(userId, objectiveName)) {
-        return res.send({
-          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-          data: {
-            content: `Objective "${objectiveName}" not found.`,
-            flags: InteractionResponseFlags.EPHEMERAL,
-          },
-        });
+        return sendEphemeral(res, `Objective "${objectiveName}" not found.`);
       }
 
       deleteObjective(userId, objectiveName);
 
-      return res.send({
-        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-        data: {
-          content: `Objective "${objectiveName}" has been deleted forever.`,
-          flags: InteractionResponseFlags.EPHEMERAL,
-        },
-      });
+      return sendEphemeral(res, `Objective "${objectiveName}" has been deleted forever.`);
     }
 
     console.error(`unknown command type: ${type}`);
