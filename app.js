@@ -4,8 +4,19 @@ import {
   InteractionResponseFlags,
   InteractionResponseType,
   InteractionType,
-  verifyKeyMiddleware,
+  verifyKey,
 } from 'discord-interactions';
+// --- Discord signature verification middleware ---
+function verifyMiddleware(req, res, buf) {
+  const signature = req.get('X-Signature-Ed25519');
+  const timestamp = req.get('X-Signature-Timestamp');
+
+  // Verify the request signature
+  const isValid = verifyKey(buf, signature, timestamp, process.env.PUBLIC_KEY);
+  if (!isValid) {
+    throw new Error('Invalid Discord request signature');
+  }
+}
 import Database from 'better-sqlite3';
 import { Client, GatewayIntentBits, Partials } from 'discord.js';
 
@@ -18,6 +29,8 @@ botClient.login(process.env.BOT_TOKEN);
 
 // --- Express app setup ---
 const app = express();
+// Use custom Discord signature verification for JSON requests
+app.use(express.json({ verify: verifyMiddleware }));
 const PORT = process.env.PORT || 3000;
 
 // --- SQLite setup ---
@@ -129,7 +142,7 @@ setInterval(async () => {
 }, 60 * 60 * 1000); // Check every hour
 
 // --- Express route for interactions ---
-app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async function (req, res) {
+app.post('/interactions', async function (req, res) {
   const { id, type, data } = req.body;
 
   if (type === InteractionType.PING) {
