@@ -67,6 +67,61 @@ You can [add Tasker Bot](https://discord.com/oauth2/authorize?client_id=13789197
 
 ---
 
+## Self-Hosting with Docker
+
+You can run Tasker Bot on your own server using Docker and Docker Compose. This is the recommended way to deploy for personal or private use.
+
+### Prerequisites
+- [Docker](https://docs.docker.com/get-docker/)
+- [Docker Compose](https://docs.docker.com/compose/install/)
+
+### Setup Steps
+1. **Clone the repository:**
+  ```bash
+  git clone https://github.com/rsomonte/taskerbot.git
+  cd taskerbot
+  ```
+
+2. **Create a `.env` file:**
+  Copy your Discord bot token, public key, and other secrets into a `.env` file in the project root. Example:
+  ```env
+  APP_ID=your_discord_app_id
+  DISCORD_TOKEN=your_discord_bot_token
+  PUBLIC_KEY=your_discord_public_key
+  NGROK_AUTHTOKEN=your_ngrok_authtoken
+  ```
+
+3. **Build and start the containers:**
+  ```bash
+  docker-compose up --build
+  ```
+
+
+This will start two containers:
+- `taskerbot_app`: The main bot application.
+- `ngrok_tunnel`: An ngrok tunnel to expose your bot to Discord for development/testing.
+
+The SQLite database will be stored in the `data/` directory and persisted between restarts.
+
+**Disclaimer:** The ngrok public URL may not appear directly in the output of the `docker-compose up` command. To retrieve the active tunnel URL, run:
+```bash
+curl http://127.0.0.1:4040/api/tunnels
+```
+Copy the HTTPS forwarding URL from the output and paste it into your Discord developer portal as the interaction endpoint.
+
+### Updating
+To update your bot, pull the latest code and rebuild:
+```bash
+git pull
+docker-compose up --build
+```
+
+### Stopping
+To stop the containers:
+```bash
+docker-compose down
+```
+
 ## Disclaimer
 
 All objectives and related data are stored in a database managed by the bot owner. While your data is not shared with third parties, the server administrator has access to the stored information. Please use the bot with this in mind if privacy is a concern.
