@@ -51,6 +51,16 @@ Delete one of your objectives forever.
 
 ---
 
+### `/rename`
+Rename one of your objectives.  
+**Options:**
+- `current_name` (string, required): The current name of the objective you want to rename.
+- `new_name` (string, required): The new name for the objective.
+
+This command allows you to change the name of an existing objective while preserving all its data including streak count, submission history, and frequency settings.
+
+---
+
 ## Features
 
 - **Personal Objectives:** Each user can create and manage their own objectives.

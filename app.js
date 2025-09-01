@@ -64,6 +64,9 @@ function createObjective(obj) {
 function deleteObjective(userId, name) {
   db.prepare('DELETE FROM objectives WHERE userId = ? AND name = ?').run(userId, name);
 }
+function renameObjective(userId, currentName, newName) {
+  db.prepare('UPDATE objectives SET name = ? WHERE userId = ? AND name = ?').run(newName, userId, currentName);
+}
 
 /**
  * Returns the next allowed submission timestamp for an objective.
@@ -299,6 +302,31 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
       deleteObjective(userId, objectiveName);
 
       return sendEphemeral(res, `Objective "${objectiveName}" has been deleted forever.`);
+    }
+
+    // "rename" command
+    if (name === 'rename') {
+      const userId = req.body.member?.user?.id || req.body.user?.id;
+      const currentNameOption = data.options.find(opt => opt.name === 'current_name');
+      const newNameOption = data.options.find(opt => opt.name === 'new_name');
+      const currentName = currentNameOption?.value?.trim();
+      const newName = newNameOption?.value?.trim();
+
+      if (!currentName || !newName) {
+        return sendEphemeral(res, 'Both current name and new name are required.');
+      }
+
+      if (!getObjective(userId, currentName)) {
+        return sendEphemeral(res, `Objective "${currentName}" not found.`);
+      }
+
+      if (getObjective(userId, newName)) {
+        return sendEphemeral(res, `An objective with the name "${newName}" already exists.`);
+      }
+
+      renameObjective(userId, currentName, newName);
+
+      return sendEphemeral(res, `Objective "${currentName}" has been renamed to "${newName}".`);
     }
 
     console.error(`unknown command type: ${type}`);

@@ -125,11 +125,38 @@ const DELETE_OBJECTIVE_COMMAND = {
   contexts: [0, 1, 2],
 };
 
+/**
+ * This command allows users to rename an objective.
+ * Users must specify the current name and the new name for the objective.
+ */
+const RENAME_OBJECTIVE_COMMAND = {
+  name: 'rename',
+  description: 'Rename one of your objectives',
+  options: [
+    {
+      type: 3, // STRING
+      name: 'current_name',
+      description: 'Current name of the objective to rename',
+      required: true,
+    },
+    {
+      type: 3, // STRING
+      name: 'new_name',
+      description: 'New name for the objective',
+      required: true,
+    },
+  ],
+  type: 1,
+  integration_types: [0, 1],
+  contexts: [0, 1, 2],
+};
+
 const ALL_COMMANDS = [
   SUBMIT_COMMAND,
   CREATE_OBJECTIVE_COMMAND,
   LIST_OBJECTIVES_COMMAND,
-  DELETE_OBJECTIVE_COMMAND, 
+  DELETE_OBJECTIVE_COMMAND,
+  RENAME_OBJECTIVE_COMMAND,
 ];
 
 InstallGlobalCommands(process.env.APP_ID, ALL_COMMANDS);
