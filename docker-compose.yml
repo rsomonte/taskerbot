@@ -1,21 +1,10 @@
 services:
   app:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: rsomonte/taskerbot:latest
     env_file: .env
     container_name: taskerbot_app
     volumes:
       - ./data:/usr/src/app/data
     restart: unless-stopped
-  ngrok:
-    image: ngrok/ngrok:alpine
-    container_name: ngrok_tunnel
-    environment:
-      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
     ports:
-      - "4040:4040"
-    command: ["http", "taskerbot_app:3000"]
-    depends_on:
-      - app
-    restart: unless-stopped
+      - "3000:3000"
