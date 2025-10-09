@@ -4,13 +4,34 @@ on:
   push:
     tags:
       - "v*"
+  workflow_run:
+    workflows:
+      - "Create Release"
+    types:
+      - completed
+  workflow_dispatch:
 
 jobs:
   build-and-push:
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 
+
+      - name: Resolve Tag for workflow_run
+        if: github.event_name == 'workflow_run' # Solo se ejecuta si lo activa "Create Release"
+        run: |
+          git fetch --prune --unshallow --tags || git fetch --prune --tags
+          TAG=$(git tag --points-at ${{ github.event.workflow_run.head_sha }} | head -n1)
+          if [ -z "$TAG" ]; then
+            echo "No tag found for commit ${{ github.event.workflow_run.head_sha }}"
+            exit 1
+          fi
+          echo "TAG=$TAG" >> $GITHUB_ENV
+          echo "Found tag: $TAG"
 
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
@@ -25,6 +46,7 @@ jobs:
           images: ${{ secrets.DOCKERHUB_USERNAME }}/taskerbot
           tags: |
             type=ref,event=tag
+            type=raw,value=${{ env.TAG }},enable=${{ github.event_name == 'workflow_run' }}
             type=raw,value=latest
 
       - name: Build and push Docker image
