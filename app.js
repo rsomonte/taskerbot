@@ -125,7 +125,25 @@ setInterval(async () => {
           ).run(now, obj.userId, obj.name);
         }
       } catch (err) {
-        console.error(`Failed to send DM to user ${obj.userId}:`, err);
+        // Handle specific Discord API errors
+        if (err.code === 50007) {
+          // Cannot send messages to this user (DMs disabled or blocked)
+          console.log(`User ${obj.userId} has DMs disabled or blocked the bot. Skipping reminder for objective "${obj.name}".`);
+          // Mark as reminded to prevent spam attempts
+          db.prepare(
+            `UPDATE objectives SET lastReminded = ? WHERE userId = ? AND name = ?`
+          ).run(now, obj.userId, obj.name);
+        } else if (err.code === 10013) {
+          // Unknown user (user account deleted or invalid)
+          console.log(`User ${obj.userId} not found (account may be deleted). Skipping reminder for objective "${obj.name}".`);
+          // Mark as reminded to prevent future attempts
+          db.prepare(
+            `UPDATE objectives SET lastReminded = ? WHERE userId = ? AND name = ?`
+          ).run(now, obj.userId, obj.name);
+        } else {
+          // Other errors - log but don't mark as reminded to retry later
+          console.error(`Failed to send DM to user ${obj.userId} for objective "${obj.name}":`, err.message);
+        }
       }
     }
   }
