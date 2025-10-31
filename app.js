@@ -14,7 +14,7 @@ const botClient = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.DirectMessages],
   partials: [Partials.Channel],
 });
-botClient.login(process.env.BOT_TOKEN);
+botClient.login(process.env.DISCORD_TOKEN);
 
 // --- Express app setup ---
 const app = express();
