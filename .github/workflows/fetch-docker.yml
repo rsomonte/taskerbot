@@ -1,0 +1,61 @@
+name: Fetch latest image on server
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          # This secret holds your SSH private key for connecting to the server.
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Deploy via SSH and Docker Compose
+        env:
+          # Your server's IP address or hostname, securely stored as a secret.
+          DEPLOY_HOST_DNS: ${{ secrets.SERVER_DNS_NAME }}
+          # The user you SSH in as (e.g., 'ubuntu', 'ec2-user', 'root')
+          DEPLOY_USER: ${{ secrets.SERVER_USER }} 
+          # The directory on the remote server where your docker-compose.yml file is located
+          # DEPLOY_DIR: \~
+
+        run: |
+          # 0. Resolve the DNS name to get the current IP address in case of constant public IP changes
+          DEPLOY_HOST_IP=$(dig +short ${{ env.DEPLOY_HOST_DNS }})
+
+          if [ -z "$DEPLOY_HOST_IP" ]; then
+            echo "ERROR: Could not resolve DNS name to an IP address."
+            exit 1
+          fi
+          echo "Starting deployment to $DEPLOY_HOST_IP..."
+          
+          # SSH Command: Connects to the server and executes a series of commands.
+          ssh -o StrictHostKeyChecking=no -p ${{ env.SSH_PORT }} ${{ env.DEPLOY_USER }}@${{ env.DEPLOY_HOST_IP }} << 'EOF'
+            
+            # 1. Change to the application directory
+            # cd ${{ env.DEPLOY_DIR }}
+            
+            # 2. Stop and remove existing containers
+            echo "Running: docker compose down"
+            docker compose down
+            
+            # 3. Fetch the newest images
+            echo "Running: docker compose pull"
+            docker compose pull
+            
+            # 4. Start the services with the new images
+            echo "Running: docker compose up -d"
+            docker compose up -d
+            
+            echo "Deployment complete."
+            exit
+          EOF
