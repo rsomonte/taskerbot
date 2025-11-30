@@ -22,27 +22,33 @@ jobs:
       - name: Deploy via SSH and Docker Compose
         env:
           # Your server's IP address or hostname, securely stored as a secret.
-          DEPLOY_HOST_DNS: ${{ secrets.SERVER_DNS_NAME }}
+          DEPLOY_HOST: ${{ secrets.SERVER_DNS_NAME }}
           # The user you SSH in as (e.g., 'ubuntu', 'ec2-user', 'root')
           DEPLOY_USER: ${{ secrets.SERVER_USER }} 
-          # The directory on the remote server where your docker-compose.yml file is located
-          # DEPLOY_DIR: \~
+          SERVER_SSH_PORT: ${{ secrets.SSH_PORT }}
+          # CHANGE THIS: Set the actual path on your server
+          DEPLOY_DIR: /home/${{ secrets.SERVER_USER }}/
 
         run: |
-          # 0. Resolve the DNS name to get the current IP address in case of constant public IP changes
-          DEPLOY_HOST_IP=$(dig +short ${{ env.DEPLOY_HOST_DNS }})
-
+          # Resolve the DNS name to an IP address
+          DEPLOY_HOST_IP=$(dig +short ${{ env.DEPLOY_HOST }} | tail -n1)
+          
           if [ -z "$DEPLOY_HOST_IP" ]; then
-            echo "ERROR: Could not resolve DNS name to an IP address."
+            echo "Error: Could not resolve IP for DNS"
             exit 1
           fi
-          echo "Starting deployment to $DEPLOY_HOST_IP..."
+
+          # Mask the IP address in logs
+          echo "::add-mask::$DEPLOY_HOST_IP"
+
+          echo "Resolved DNS IP"
+          echo "Starting deployment to Server..."
           
-          # SSH Command: Connects to the server and executes a series of commands.
-          ssh -o StrictHostKeyChecking=no -p ${{ env.SSH_PORT }} ${{ env.DEPLOY_USER }}@${{ env.DEPLOY_HOST_IP }} << 'EOF'
+          # SSH Command: Connects using the resolved IP 
+          ssh -q -o StrictHostKeyChecking=no -p ${{ env.SERVER_SSH_PORT }} ${{ env.DEPLOY_USER }}@$DEPLOY_HOST_IP << EOF
             
             # 1. Change to the application directory
-            # cd ${{ env.DEPLOY_DIR }}
+            cd ${{ env.DEPLOY_DIR }} || exit 1
             
             # 2. Stop and remove existing containers
             echo "Running: docker compose down"
