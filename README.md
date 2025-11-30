@@ -58,7 +58,7 @@ Rename one of your objectives.
 - `new_name` (string, required): The new name for the objective.
 
 **Example:**  
-![](placeholder)
+![](https://i.imgur.com/G7rsDSJ)
 
 ---
 ### `/help`
@@ -66,8 +66,7 @@ Get help with the commands of the bot directly in discord.
 Choose the command you need help as an option.
 
 **Example:**  
-![](placeholder)
-
+![](https://i.imgur.com/wAn5Xiq)
 ---
 ### `/settings`
 Change settings for how the bot interacts with you.  
@@ -77,7 +76,7 @@ Change settings for how the bot interacts with you.
   - `public`: Messages are visible to everyone in the channel.
 
 **Example:**  
-![](placeholder)
+![](https://i.imgur.com/fMPyBjF.gif)
 
 ---
 

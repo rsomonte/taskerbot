@@ -460,17 +460,17 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
         case 'rename':
           title = '`/rename`';
           description = 'Rename one of your existing objectives. You must provide the current name and the new name.';
-          // no image yet
+          image = { url: 'https://i.imgur.com/G7rsDSJ' };
           break;
         case 'settings':
           title = '`/settings`';
           description = 'Adjust your bot preferences, such as message visibility (ephemeral or public).';
-          // no image yet
+          image = { url: 'https://i.imgur.com/fMPyBjF.gif' };
           break;
         case 'help':
           title = '`/help`';
           description = 'Get detailed information about how to use each of the bot commands.';
-          // no image yet
+          image = { url: 'https://i.imgur.com/wAn5Xiq' };
           break;
         case 'GitHub':
           title = 'GitHub Repository';
