@@ -34,6 +34,12 @@ db.exec(`
     PRIMARY KEY (userId, name)
   )
 `);
+db.exec(`
+  CREATE TABLE IF NOT EXISTS user_settings (
+    userId TEXT PRIMARY KEY,
+    visibility TEXT DEFAULT 'ephemeral'
+  )
+`);
 
 // --- Helper functions ---
 
@@ -69,6 +75,21 @@ function renameObjective(userId, currentName, newName) {
 }
 
 /**
+ * Gets the visibility setting for a user. Defaults to 'ephemeral'.
+ * @param {string} userId - The user's Discord ID.
+ * @returns {'ephemeral' | 'public'}
+ */
+function getUserVisibility(userId) {
+  let setting = db.prepare('SELECT visibility FROM user_settings WHERE userId = ?').get(userId);
+  return setting ? setting.visibility : 'ephemeral';
+}
+
+function setUserVisibility(userId, visibility) {
+  db.prepare('INSERT INTO user_settings (userId, visibility) VALUES (?, ?) ON CONFLICT(userId) DO UPDATE SET visibility=excluded.visibility')
+    .run(userId, visibility);
+}
+
+/**
  * Returns the next allowed submission timestamp for an objective.
  * @param {object} obj - The objective object from the DB.
  * @returns {number} - Timestamp in ms when the window opens.
@@ -95,6 +116,23 @@ function sendEphemeral(res, content) {
       content,
       flags: InteractionResponseFlags.EPHEMERAL,
     },
+  });
+}
+
+/**
+ * Sends a response that respects the user's visibility setting.
+ * @param {object} res - The Express response object.
+ * @param {string} userId - The user's Discord ID.
+ * @param {object} data - The response data payload (content, embeds, etc.).
+ */
+function sendResponse(res, userId, data) {
+  const visibility = getUserVisibility(userId);
+  if (visibility === 'ephemeral') {
+    data.flags = InteractionResponseFlags.EPHEMERAL;
+  }
+  return res.send({
+    type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+    data,
   });
 }
 
@@ -157,6 +195,49 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
     return res.send({ type: InteractionResponseType.PONG });
   }
 
+  if (type === InteractionType.MESSAGE_COMPONENT) {
+    const userId = req.body.member?.user?.id || req.body.user?.id;
+    const { custom_id } = data;
+
+    if (custom_id.startsWith('visibility_')) {
+      const newVisibility = custom_id.split('_')[1]; // 'public' or 'ephemeral'
+      setUserVisibility(userId, newVisibility);
+
+      // Update the original message in place
+      const currentVisibility = newVisibility;
+      const otherVisibility = currentVisibility === 'ephemeral' ? 'public' : 'ephemeral';
+
+      return res.send({
+        type: InteractionResponseType.UPDATE_MESSAGE,
+        data: {
+          embeds: [{
+            title: 'Settings',
+            description: 'Manage your bot preferences here.',
+            color: 0x5865F2, // Discord blurple
+            fields: [
+              {
+                name: 'Message Visibility',
+                value: `Your responses are currently set to **${currentVisibility}**.`,
+              },
+            ],
+          }],
+          components: [{
+            type: 1, // Action Row
+            components: [{
+              type: 2, // Button
+              style: 2, // Secondary (grey)
+              label: `Switch to ${otherVisibility.charAt(0).toUpperCase() + otherVisibility.slice(1)}`,
+              custom_id: `visibility_${otherVisibility}`,
+            }],
+          }],
+          flags: InteractionResponseFlags.EPHEMERAL,
+        },
+      });
+    }
+
+    return res.sendStatus(400);
+  }
+
   if (type === InteractionType.APPLICATION_COMMAND) {
     const { name } = data;
 
@@ -178,28 +259,27 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
 
       // Error handling
       if (!attachment && !objective) {
-        return sendEphemeral(res, 'Missing both image and objective.');
+        return sendResponse(res, userId, { content: 'Missing both image and objective.' });
       }
       if (!attachment) {
-        return sendEphemeral(res, 'Missing image.');
+        return sendResponse(res, userId, { content: 'Missing image.' });
       }
       if (!objective) {
-        return sendEphemeral(res, 'Missing objective.');
+        return sendResponse(res, userId, { content: 'Missing objective.' });
       }
 
       // Find the objective object in the database
       let obj = getObjective(userId, objective);
 
       if (!obj) {
-        return sendEphemeral(res, `Objective "${objective}" not found. Please create it first with /create_objective.`);
+        return sendResponse(res, userId, { content: `Objective "${objective}" not found. Please create it first with /create_objective.` });
       }
 
       // Frequency check
       const now = Date.now();
       const nextAllowed = getNextAllowedTime(obj);
       if (obj.lastSubmitted && now < nextAllowed) {
-        const discordTs = `<t:${Math.floor(nextAllowed / 1000)}:R>`;
-        return sendEphemeral(res, `You have already submitted **${objective}**. Try again ${discordTs}.`);
+        const discordTs = `<t:${Math.floor(nextAllowed / 1000)}:R>`;        return sendResponse(res, userId, { content: `You have already submitted **${objective}**. Try again ${discordTs}.` });
       }
 
       // Mark as submitted
@@ -235,22 +315,20 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
       const nextAllowedAfter = getNextAllowedTime(obj);
       const discordTs = `<t:${Math.floor(nextAllowedAfter / 1000)}:R>`;
       const userMention = `<@${userId}>`;
-
-      return res.send({
-        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-        data: {
-          embeds: [
-            {
-              description: `Objective '${objective}' completed!` +
-                (obj.streak > 3 ? `\nStreak: ${obj.streak} 🔥` : ''),
-              image: { url: attachment.url },
-            },
-            {
-              description: `${userMention} will be able to submit this objective again ${discordTs}`,
-            },
-          ],
-        },
-      });
+      
+      const responseData = {
+        embeds: [
+          {
+            description: `Objective '${objective}' completed!` +
+              (obj.streak > 3 ? `\nStreak: ${obj.streak} 🔥` : ''),
+            image: { url: attachment.url },
+          },
+          {
+            description: `${userMention} will be able to submit this objective again ${discordTs}`,
+          },
+        ],
+      };
+      return sendResponse(res, userId, responseData);
     }
 
     // "create_objective" command
@@ -262,12 +340,12 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
       const frequency = freqOption?.value;
 
       if (!objectiveName || !frequency) {
-        return sendEphemeral(res, 'Objective name and frequency are required.');
+        return sendResponse(res, userId, { content: 'Objective name and frequency are required.' });
       }
 
       // Check if already exists
       if (getObjective(userId, objectiveName)) {
-        return sendEphemeral(res, `Objective "${objectiveName}" already exists.`);
+        return sendResponse(res, userId, { content: `Objective "${objectiveName}" already exists.` });
       }
 
       createObjective({
@@ -276,7 +354,7 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
         frequency,
       });
 
-      return sendEphemeral(res, `Objective "${objectiveName}" (${frequency}) created!`);
+      return sendResponse(res, userId, { content: `Objective "${objectiveName}" (${frequency}) created!` });
     }
 
     // "list_objectives" command
@@ -284,7 +362,7 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
       const userId = req.body.member?.user?.id || req.body.user?.id;
       const objectives = getObjectives(userId);
       if (objectives.length === 0) {
-        return sendEphemeral(res, 'You have no objectives.');
+        return sendResponse(res, userId, { content: 'You have no objectives.' });
       }
       const now = Date.now();
       const lines = objectives.map(obj => {
@@ -300,7 +378,7 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
         return `- *${obj.name}* (${obj.frequency}) - ${timeStr}` +
           (obj.streak > 3 ? ` | Streak: ${obj.streak} 🔥` : '');
       });
-      return sendEphemeral(res, `Your objectives:\n${lines.join('\n')}`);
+      return sendResponse(res, userId, { content: `Your objectives:\n${lines.join('\n')}` });
     }
 
     // "delete_objective" command
@@ -310,16 +388,16 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
       const objectiveName = nameOption?.value?.trim();
 
       if (!objectiveName) {
-        return sendEphemeral(res, 'Objective name is required.');
+        return sendResponse(res, userId, { content: 'Objective name is required.' });
       }
 
       if (!getObjective(userId, objectiveName)) {
-        return sendEphemeral(res, `Objective "${objectiveName}" not found.`);
+        return sendResponse(res, userId, { content: `Objective "${objectiveName}" not found.` });
       }
 
       deleteObjective(userId, objectiveName);
 
-      return sendEphemeral(res, `Objective "${objectiveName}" has been deleted forever.`);
+      return sendResponse(res, userId, { content: `Objective "${objectiveName}" has been deleted forever.` });
     }
 
     // "rename" command
@@ -331,20 +409,124 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
       const newName = newNameOption?.value?.trim();
 
       if (!currentName || !newName) {
-        return sendEphemeral(res, 'Both current name and new name are required.');
+        return sendResponse(res, userId, { content: 'Both current name and new name are required.' });
       }
 
       if (!getObjective(userId, currentName)) {
-        return sendEphemeral(res, `Objective "${currentName}" not found.`);
+        return sendResponse(res, userId, { content: `Objective "${currentName}" not found.` });
       }
 
       if (getObjective(userId, newName)) {
-        return sendEphemeral(res, `An objective with the name "${newName}" already exists.`);
+        return sendResponse(res, userId, { content: `An objective with the name "${newName}" already exists.` });
       }
 
       renameObjective(userId, currentName, newName);
 
-      return sendEphemeral(res, `Objective "${currentName}" has been renamed to "${newName}".`);
+      return sendResponse(res, userId, { content: `Objective "${currentName}" has been renamed to "${newName}".` });
+    }
+
+    // "help" command
+    if (name === 'help') {
+      const userId = req.body.member?.user?.id || req.body.user?.id;
+      const commandOption = data.options.find(opt => opt.name === 'command');
+      const commandName = commandOption?.value;
+
+      let title = '';
+      let description = '';
+      let image = null;
+      let url = null;
+
+      switch (commandName) {
+        case 'submit':
+          title = '`/submit`';
+          description = 'Submit a picture for one of your objectives. You must provide the image and the name of an objective you have already created.';
+          image = { url: 'https://i.imgur.com/UAbUQ28.gif' };
+          break;
+        case 'create_objective':
+          title = '`/create_objective`';
+          description = 'Create a new objective. You need to provide a unique name and select a frequency (daily, weekly, or monthly).';
+          image = { url: 'https://i.imgur.com/Z936pXa.gif' };
+          break;
+        case 'list_objectives':
+          title = '`/list_objectives`';
+          description = 'Lists all of your current objectives, their frequency, and when you can next submit them.';
+          image = { url: 'https://i.imgur.com/ANsLTEk.gif' };
+          break;
+        case 'delete_objective':
+          title = '`/delete_objective`';
+          description = 'Permanently delete one of your objectives. You must provide the name of the objective to delete.';
+          image = { url: 'https://i.imgur.com/Oi7NVT7.gif' };
+          break;
+        case 'rename':
+          title = '`/rename`';
+          description = 'Rename one of your existing objectives. You must provide the current name and the new name.';
+          // no image yet
+          break;
+        case 'settings':
+          title = '`/settings`';
+          description = 'Adjust your bot preferences, such as message visibility (ephemeral or public).';
+          // no image yet
+          break;
+        case 'help':
+          title = '`/help`';
+          description = 'Get detailed information about how to use each of the bot commands.';
+          // no image yet
+          break;
+        case 'GitHub':
+          title = 'GitHub Repository';
+          description = 'Check out the source code for this bot on [GitHub](https://github.com/rsomonte/taskerbot)!';
+          url = 'https://github.com/rsomonte/taskerbot'; 
+          break;
+      }
+
+      const embed = {
+        title: title,
+        description: description,
+        color: 0x5865F2, // Discord blurple
+      };
+
+      if (image) {
+        embed.image = image;
+      }
+      if (url) {
+        embed.url = url;
+      }
+
+      return sendResponse(res, userId, { embeds: [embed] });
+    }
+
+    // settings command
+    if (name === 'settings') {
+      const userId = req.body.member?.user?.id || req.body.user?.id;
+      const currentVisibility = getUserVisibility(userId);
+      const otherVisibility = currentVisibility === 'ephemeral' ? 'public' : 'ephemeral';
+
+      return res.send({
+        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+        data: {
+          embeds: [{
+            title: 'Settings',
+            description: 'Manage your bot preferences here.',
+            color: 0x5865F2, // Discord blurple
+            fields: [
+              {
+                name: 'Message Visibility',
+                value: `Your responses are currently set to **${currentVisibility}**.`,
+              },
+            ],
+          }],
+          components: [{
+            type: 1, // Action Row
+            components: [{
+              type: 2, // Button
+              style: 2, // Secondary (grey)
+              label: `Switch to ${otherVisibility.charAt(0).toUpperCase() + otherVisibility.slice(1)}`,
+              custom_id: `visibility_${otherVisibility}`,
+            }],
+          }],
+          flags: InteractionResponseFlags.EPHEMERAL,
+        },
+      });
     }
 
     console.error(`unknown command type: ${type}`);

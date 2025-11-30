@@ -57,7 +57,27 @@ Rename one of your objectives.
 - `current_name` (string, required): The current name of the objective you want to rename.
 - `new_name` (string, required): The new name for the objective.
 
-This command allows you to change the name of an existing objective while preserving all its data including streak count, submission history, and frequency settings.
+**Example:**  
+![](placeholder)
+
+---
+### `/help`
+Get help with the commands of the bot directly in discord.
+Choose the command you need help as an option.
+
+**Example:**  
+![](placeholder)
+
+---
+### `/settings`
+Change settings for how the bot interacts with you.  
+**Options:**
+- `visibility` (string, optional): Choose how the bot's messages are displayed to you. Options are:
+  - `ephemeral` (default): Messages are only visible to you.
+  - `public`: Messages are visible to everyone in the channel.
+
+**Example:**  
+![](placeholder)
 
 ---
 

@@ -151,12 +151,60 @@ const RENAME_OBJECTIVE_COMMAND = {
   contexts: [0, 1, 2],
 };
 
+/**
+ * This command provides help information about the bot commands.
+ * Users must specify the name of the command they need help with.
+ * The commands appear as a dropdown selection.
+ */
+const HELP_COMMAND = {
+  name: 'help',
+  description: 'Get help with the bot commands',
+  options: [
+    {
+      type: 3, // STRING
+      name: 'command',
+      description: 'Command you need help with',
+      required: true,
+      choices: [
+        { name: 'submit', value: 'submit' },
+        { name: 'create_objective', value: 'create_objective' },
+        { name: 'list_objectives', value: 'list_objectives' },
+        { name: 'delete_objective', value: 'delete_objective' },
+        { name: 'rename', value: 'rename' },
+        { name: 'GitHub', value: 'GitHub' },
+        { name: 'settings', value: 'settings' },
+        { name: 'help', value: 'help' },
+      ],
+    },
+  ],
+  type: 1,
+  integration_types: [0, 1],
+  contexts: [0, 1, 2],
+};
+
+/*
+  * This command allows users to adjust the way messages are sent.
+  * For now, it just let's the user choose between ephemeral and public messages.
+  * However, this command should always display as ephemeral, regardless of the setting.
+  * Therefore, no one will try to change your settings XD.
+  * Also, this setting should not apply to private DMs.
+*/
+const SETTINGS_COMMAND = {
+  name: 'settings',
+  description: 'Manage your bot preferences',
+  type: 1,
+  integration_types: [0, 1],
+  contexts: [0, 1, 2],
+};
+
 const ALL_COMMANDS = [
   SUBMIT_COMMAND,
   CREATE_OBJECTIVE_COMMAND,
   LIST_OBJECTIVES_COMMAND,
   DELETE_OBJECTIVE_COMMAND,
   RENAME_OBJECTIVE_COMMAND,
+  HELP_COMMAND,
+  SETTINGS_COMMAND,
 ];
 
 InstallGlobalCommands(process.env.APP_ID, ALL_COMMANDS);
