@@ -55,6 +55,7 @@ const SUBMIT_COMMAND = {
       name: 'objective',
       description: 'Type your objective (*must match one you created*)',
       required: true,
+      autocomplete: true,
     },
   ],
   type: 1,
@@ -118,6 +119,7 @@ const DELETE_OBJECTIVE_COMMAND = {
       name: 'name',
       description: 'Objective name to delete',
       required: true,
+      autocomplete: true,
     },
   ],
   type: 1,
@@ -138,6 +140,7 @@ const RENAME_OBJECTIVE_COMMAND = {
       name: 'current_name',
       description: 'Current name of the objective to rename',
       required: true,
+      autocomplete: true,
     },
     {
       type: 3, // STRING

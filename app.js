@@ -238,6 +238,42 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
     return res.sendStatus(400);
   }
 
+  if (type === InteractionType.APPLICATION_COMMAND_AUTOCOMPLETE) {
+    const { name, options } = data;
+
+    if (name === 'submit' || name === 'delete_objective' || name === 'rename') {
+      const focusedOption = options.find((opt) => opt.focused);
+
+      if (focusedOption) {
+        const isObjectiveOption = 
+          (name === 'submit' && focusedOption.name === 'objective') ||
+          (name === 'delete_objective' && focusedOption.name === 'name') ||
+          (name === 'rename' && focusedOption.name === 'current_name');
+
+        if (isObjectiveOption) {
+          const userId = req.body.member?.user?.id || req.body.user?.id;
+          const objectives = getObjectives(userId);
+          const filtered = objectives.filter((obj) =>
+            obj.name.toLowerCase().includes(focusedOption.value.toLowerCase())
+          );
+
+          return res.send({
+            type: InteractionResponseType.APPLICATION_COMMAND_AUTOCOMPLETE_RESULT,
+            data: {
+              choices: filtered.map((obj) => ({ name: obj.name, value: obj.name })).slice(0, 25),
+            },
+          });
+        }
+      }
+    }
+    return res.send({
+      type: InteractionResponseType.APPLICATION_COMMAND_AUTOCOMPLETE_RESULT,
+      data: {
+        choices: [],
+      },
+    });
+  }
+
   if (type === InteractionType.APPLICATION_COMMAND) {
     const { name } = data;
 
