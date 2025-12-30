@@ -1,7 +1,7 @@
 {
   "name": "tasker",
   "private": true,
-  "version": "1.3.2",
+  "version": "1.3.3",
   "main": "app.js",
   "type": "module",
   "engines": {
@@ -14,7 +14,7 @@
   },
   "author": "rsomonte",
   "dependencies": {
-    "better-sqlite3": "^11.10.0",
+    "@libsql/client": "^0.15.15",
     "discord-interactions": "^4.0.0",
     "discord.js": "^14.19.3",
     "dotenv": "^16.6.1",

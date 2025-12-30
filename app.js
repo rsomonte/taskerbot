@@ -6,7 +6,7 @@ import {
   InteractionType,
   verifyKeyMiddleware,
 } from 'discord-interactions';
-import Database from 'better-sqlite3';
+import { createClient } from "@libsql/client";
 import { Client, GatewayIntentBits, Partials } from 'discord.js';
 
 // --- Discord.js client for DMs ---
@@ -21,8 +21,12 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // --- SQLite setup ---
-const db = new Database('./data/objectives.db');
-db.exec(`
+const client = createClient({
+  url: process.env.TURSO_DATABASE_URL,
+  authToken: process.env.TURSO_AUTH_TOKEN,
+});
+
+await client.execute(`
   CREATE TABLE IF NOT EXISTS objectives (
     userId TEXT,
     name TEXT,
@@ -34,7 +38,7 @@ db.exec(`
     PRIMARY KEY (userId, name)
   )
 `);
-db.exec(`
+await client.execute(`
   CREATE TABLE IF NOT EXISTS user_settings (
     userId TEXT PRIMARY KEY,
     visibility TEXT DEFAULT 'ephemeral'
@@ -43,50 +47,89 @@ db.exec(`
 
 // --- Helper functions ---
 
-function getObjectives(userId) {
-  return db.prepare('SELECT * FROM objectives WHERE userId = ?').all(userId);
+async function getObjectives(userId) {
+  const result = await client.execute({
+    sql: 'SELECT * FROM objectives WHERE userId = ?',
+    args: [userId],
+  });
+  return result.rows;
 }
-function getObjective(userId, name) {
-  return db.prepare('SELECT * FROM objectives WHERE userId = ? AND name = ?').get(userId, name);
+
+async function getObjective(userId, name) {
+  const result = await client.execute({
+    sql: 'SELECT * FROM objectives WHERE userId = ? AND name = ?',
+    args: [userId, name],
+  });
+  return result.rows[0];
 }
-function upsertObjective(obj) {
-  db.prepare(`
-    INSERT INTO objectives (userId, name, frequency, lastSubmitted, streak, lastStreakDay, lastReminded)
-    VALUES (@userId, @name, @frequency, @lastSubmitted, @streak, @lastStreakDay, @lastReminded)
-    ON CONFLICT(userId, name) DO UPDATE SET
-      frequency=excluded.frequency,
-      lastSubmitted=excluded.lastSubmitted,
-      streak=excluded.streak,
-      lastStreakDay=excluded.lastStreakDay,
-      lastReminded=excluded.lastReminded
-  `).run(obj);
+
+async function upsertObjective(obj) {
+  await client.execute({
+    sql: `
+      INSERT INTO objectives (userId, name, frequency, lastSubmitted, streak, lastStreakDay, lastReminded)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(userId, name) DO UPDATE SET
+        frequency=excluded.frequency,
+        lastSubmitted=excluded.lastSubmitted,
+        streak=excluded.streak,
+        lastStreakDay=excluded.lastStreakDay,
+        lastReminded=excluded.lastReminded
+    `,
+    args: [
+      obj.userId,
+      obj.name,
+      obj.frequency,
+      obj.lastSubmitted,
+      obj.streak,
+      obj.lastStreakDay,
+      obj.lastReminded,
+    ],
+  });
 }
-function createObjective(obj) {
-  db.prepare(`
-    INSERT INTO objectives (userId, name, frequency, lastSubmitted, streak, lastStreakDay, lastReminded)
-    VALUES (@userId, @name, @frequency, NULL, 0, NULL, NULL)
-  `).run(obj);
+
+async function createObjective(obj) {
+  await client.execute({
+    sql: `
+      INSERT INTO objectives (userId, name, frequency, lastSubmitted, streak, lastStreakDay, lastReminded)
+      VALUES (?, ?, ?, NULL, 0, NULL, NULL)
+    `,
+    args: [obj.userId, obj.name, obj.frequency],
+  });
 }
-function deleteObjective(userId, name) {
-  db.prepare('DELETE FROM objectives WHERE userId = ? AND name = ?').run(userId, name);
+
+async function deleteObjective(userId, name) {
+  await client.execute({
+    sql: 'DELETE FROM objectives WHERE userId = ? AND name = ?',
+    args: [userId, name],
+  });
 }
-function renameObjective(userId, currentName, newName) {
-  db.prepare('UPDATE objectives SET name = ? WHERE userId = ? AND name = ?').run(newName, userId, currentName);
+
+async function renameObjective(userId, currentName, newName) {
+  await client.execute({
+    sql: 'UPDATE objectives SET name = ? WHERE userId = ? AND name = ?',
+    args: [newName, userId, currentName],
+  });
 }
 
 /**
  * Gets the visibility setting for a user. Defaults to 'ephemeral'.
  * @param {string} userId - The user's Discord ID.
- * @returns {'ephemeral' | 'public'}
+ * @returns {Promise<'ephemeral' | 'public'>}
  */
-function getUserVisibility(userId) {
-  let setting = db.prepare('SELECT visibility FROM user_settings WHERE userId = ?').get(userId);
+async function getUserVisibility(userId) {
+  const result = await client.execute({
+    sql: 'SELECT visibility FROM user_settings WHERE userId = ?',
+    args: [userId],
+  });
+  const setting = result.rows[0];
   return setting ? setting.visibility : 'ephemeral';
 }
 
-function setUserVisibility(userId, visibility) {
-  db.prepare('INSERT INTO user_settings (userId, visibility) VALUES (?, ?) ON CONFLICT(userId) DO UPDATE SET visibility=excluded.visibility')
-    .run(userId, visibility);
+async function setUserVisibility(userId, visibility) {
+  await client.execute({
+    sql: 'INSERT INTO user_settings (userId, visibility) VALUES (?, ?) ON CONFLICT(userId) DO UPDATE SET visibility=excluded.visibility',
+    args: [userId, visibility],
+  });
 }
 
 /**
@@ -125,8 +168,8 @@ function sendEphemeral(res, content) {
  * @param {string} userId - The user's Discord ID.
  * @param {object} data - The response data payload (content, embeds, etc.).
  */
-function sendResponse(res, userId, data) {
-  const visibility = getUserVisibility(userId);
+async function sendResponse(res, userId, data) {
+  const visibility = await getUserVisibility(userId);
   if (visibility === 'ephemeral') {
     data.flags = InteractionResponseFlags.EPHEMERAL;
   }
@@ -139,7 +182,8 @@ function sendResponse(res, userId, data) {
 // --- 24h Reminder Job ---
 setInterval(async () => {
   const now = Date.now();
-  const objectives = db.prepare(`SELECT * FROM objectives`).all();
+  const result = await client.execute('SELECT * FROM objectives');
+  const objectives = result.rows;
 
   for (const obj of objectives) {
     const windowOpen = getNextAllowedTime(obj);
@@ -158,9 +202,10 @@ setInterval(async () => {
           await user.send(
             `⏰ Reminder: You haven't submitted your objective "**${obj.name}**" since it became available over 24 hours ago. Don't forget to keep your streak going!`
           );
-          db.prepare(
-            `UPDATE objectives SET lastReminded = ? WHERE userId = ? AND name = ?`
-          ).run(now, obj.userId, obj.name);
+          await client.execute({
+            sql: `UPDATE objectives SET lastReminded = ? WHERE userId = ? AND name = ?`,
+            args: [now, obj.userId, obj.name],
+          });
         }
       } catch (err) {
         // Handle specific Discord API errors
@@ -168,16 +213,18 @@ setInterval(async () => {
           // Cannot send messages to this user (DMs disabled or blocked)
           console.log(`User ${obj.userId} has DMs disabled or blocked the bot. Skipping reminder for objective "${obj.name}".`);
           // Mark as reminded to prevent spam attempts
-          db.prepare(
-            `UPDATE objectives SET lastReminded = ? WHERE userId = ? AND name = ?`
-          ).run(now, obj.userId, obj.name);
+          await client.execute({
+            sql: `UPDATE objectives SET lastReminded = ? WHERE userId = ? AND name = ?`,
+            args: [now, obj.userId, obj.name],
+          });
         } else if (err.code === 10013) {
           // Unknown user (user account deleted or invalid)
           console.log(`User ${obj.userId} not found (account may be deleted). Skipping reminder for objective "${obj.name}".`);
           // Mark as reminded to prevent future attempts
-          db.prepare(
-            `UPDATE objectives SET lastReminded = ? WHERE userId = ? AND name = ?`
-          ).run(now, obj.userId, obj.name);
+          await client.execute({
+            sql: `UPDATE objectives SET lastReminded = ? WHERE userId = ? AND name = ?`,
+            args: [now, obj.userId, obj.name],
+          });
         } else {
           // Other errors - log but don't mark as reminded to retry later
           console.error(`Failed to send DM to user ${obj.userId} for objective "${obj.name}":`, err.message);
@@ -201,7 +248,7 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
 
     if (custom_id.startsWith('visibility_')) {
       const newVisibility = custom_id.split('_')[1]; // 'public' or 'ephemeral'
-      setUserVisibility(userId, newVisibility);
+      await setUserVisibility(userId, newVisibility);
 
       // Update the original message in place
       const currentVisibility = newVisibility;
@@ -243,27 +290,24 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
 
     if (name === 'submit' || name === 'delete_objective' || name === 'rename') {
       const focusedOption = options.find((opt) => opt.focused);
+      const userId = req.body.member?.user?.id || req.body.user?.id;
 
-      if (focusedOption) {
-        const isObjectiveOption = 
-          (name === 'submit' && focusedOption.name === 'objective') ||
-          (name === 'delete_objective' && focusedOption.name === 'name') ||
-          (name === 'rename' && focusedOption.name === 'current_name');
+      if (
+        (name === 'submit' && focusedOption.name === 'objective') ||
+        (name === 'delete_objective' && focusedOption.name === 'name') ||
+        (name === 'rename' && focusedOption.name === 'current_name')
+      ) {
+        const objectives = await getObjectives(userId);
+        const filtered = objectives.filter((obj) =>
+          obj.name.toLowerCase().includes(focusedOption.value.toLowerCase())
+        );
 
-        if (isObjectiveOption) {
-          const userId = req.body.member?.user?.id || req.body.user?.id;
-          const objectives = getObjectives(userId);
-          const filtered = objectives.filter((obj) =>
-            obj.name.toLowerCase().includes(focusedOption.value.toLowerCase())
-          );
-
-          return res.send({
-            type: InteractionResponseType.APPLICATION_COMMAND_AUTOCOMPLETE_RESULT,
-            data: {
-              choices: filtered.map((obj) => ({ name: obj.name, value: obj.name })).slice(0, 25),
-            },
-          });
-        }
+        return res.send({
+          type: InteractionResponseType.APPLICATION_COMMAND_AUTOCOMPLETE_RESULT,
+          data: {
+            choices: filtered.map((obj) => ({ name: obj.name, value: obj.name })).slice(0, 25),
+          },
+        });
       }
     }
     return res.send({
@@ -295,27 +339,27 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
 
       // Error handling
       if (!attachment && !objective) {
-        return sendResponse(res, userId, { content: 'Missing both image and objective.' });
+        return await sendResponse(res, userId, { content: 'Missing both image and objective.' });
       }
       if (!attachment) {
-        return sendResponse(res, userId, { content: 'Missing image.' });
+        return await sendResponse(res, userId, { content: 'Missing image.' });
       }
       if (!objective) {
-        return sendResponse(res, userId, { content: 'Missing objective.' });
+        return await sendResponse(res, userId, { content: 'Missing objective.' });
       }
 
       // Find the objective object in the database
-      let obj = getObjective(userId, objective);
+      let obj = await getObjective(userId, objective);
 
       if (!obj) {
-        return sendResponse(res, userId, { content: `Objective "${objective}" not found. Please create it first with /create_objective.` });
+        return await sendResponse(res, userId, { content: `Objective "${objective}" not found. Please create it first with /create_objective.` });
       }
 
       // Frequency check
       const now = Date.now();
       const nextAllowed = getNextAllowedTime(obj);
       if (obj.lastSubmitted && now < nextAllowed) {
-        const discordTs = `<t:${Math.floor(nextAllowed / 1000)}:R>`;        return sendResponse(res, userId, { content: `You have already submitted **${objective}**. Try again ${discordTs}.` });
+        const discordTs = `<t:${Math.floor(nextAllowed / 1000)}:R>`;        return await sendResponse(res, userId, { content: `You have already submitted **${objective}**. Try again ${discordTs}.` });
       }
 
       // Mark as submitted
@@ -345,7 +389,7 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
       }
       obj.lastStreakDay = today.toISOString().split('T')[0]; // Store as YYYY-MM-DD
 
-      upsertObjective(obj);
+      await upsertObjective(obj);
 
       // Calculate next allowed submission time for response (AFTER updating lastSubmitted)
       const nextAllowedAfter = getNextAllowedTime(obj);
@@ -364,7 +408,7 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
           },
         ],
       };
-      return sendResponse(res, userId, responseData);
+      return await sendResponse(res, userId, responseData);
     }
 
     // "create_objective" command
@@ -376,29 +420,29 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
       const frequency = freqOption?.value;
 
       if (!objectiveName || !frequency) {
-        return sendResponse(res, userId, { content: 'Objective name and frequency are required.' });
+        return await sendResponse(res, userId, { content: 'Objective name and frequency are required.' });
       }
 
       // Check if already exists
-      if (getObjective(userId, objectiveName)) {
-        return sendResponse(res, userId, { content: `Objective "${objectiveName}" already exists.` });
+      if (await getObjective(userId, objectiveName)) {
+        return await sendResponse(res, userId, { content: `Objective "${objectiveName}" already exists.` });
       }
 
-      createObjective({
+      await createObjective({
         userId,
         name: objectiveName,
         frequency,
       });
 
-      return sendResponse(res, userId, { content: `Objective "${objectiveName}" (${frequency}) created!` });
+      return await sendResponse(res, userId, { content: `Objective "${objectiveName}" (${frequency}) created!` });
     }
 
     // "list_objectives" command
     if (name === 'list_objectives') {
       const userId = req.body.member?.user?.id || req.body.user?.id;
-      const objectives = getObjectives(userId);
+      const objectives = await getObjectives(userId);
       if (objectives.length === 0) {
-        return sendResponse(res, userId, { content: 'You have no objectives.' });
+        return await sendResponse(res, userId, { content: 'You have no objectives.' });
       }
       const now = Date.now();
       const lines = objectives.map(obj => {
@@ -414,7 +458,7 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
         return `- *${obj.name}* (${obj.frequency}) - ${timeStr}` +
           (obj.streak > 3 ? ` | Streak: ${obj.streak} 🔥` : '');
       });
-      return sendResponse(res, userId, { content: `Your objectives:\n${lines.join('\n')}` });
+      return await sendResponse(res, userId, { content: `Your objectives:\n${lines.join('\n')}` });
     }
 
     // "delete_objective" command
@@ -424,16 +468,16 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
       const objectiveName = nameOption?.value?.trim();
 
       if (!objectiveName) {
-        return sendResponse(res, userId, { content: 'Objective name is required.' });
+        return await sendResponse(res, userId, { content: 'Objective name is required.' });
       }
 
-      if (!getObjective(userId, objectiveName)) {
-        return sendResponse(res, userId, { content: `Objective "${objectiveName}" not found.` });
+      if (!await getObjective(userId, objectiveName)) {
+        return await sendResponse(res, userId, { content: `Objective "${objectiveName}" not found.` });
       }
 
-      deleteObjective(userId, objectiveName);
+      await deleteObjective(userId, objectiveName);
 
-      return sendResponse(res, userId, { content: `Objective "${objectiveName}" has been deleted forever.` });
+      return await sendResponse(res, userId, { content: `Objective "${objectiveName}" has been deleted forever.` });
     }
 
     // "rename" command
@@ -445,20 +489,20 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
       const newName = newNameOption?.value?.trim();
 
       if (!currentName || !newName) {
-        return sendResponse(res, userId, { content: 'Both current name and new name are required.' });
+        return await sendResponse(res, userId, { content: 'Both current name and new name are required.' });
       }
 
-      if (!getObjective(userId, currentName)) {
-        return sendResponse(res, userId, { content: `Objective "${currentName}" not found.` });
+      if (!await getObjective(userId, currentName)) {
+        return await sendResponse(res, userId, { content: `Objective "${currentName}" not found.` });
       }
 
-      if (getObjective(userId, newName)) {
-        return sendResponse(res, userId, { content: `An objective with the name "${newName}" already exists.` });
+      if (await getObjective(userId, newName)) {
+        return await sendResponse(res, userId, { content: `An objective with the name "${newName}" already exists.` });
       }
 
-      renameObjective(userId, currentName, newName);
+      await renameObjective(userId, currentName, newName);
 
-      return sendResponse(res, userId, { content: `Objective "${currentName}" has been renamed to "${newName}".` });
+      return await sendResponse(res, userId, { content: `Objective "${currentName}" has been renamed to "${newName}".` });
     }
 
     // "help" command
@@ -528,13 +572,13 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
         embed.url = url;
       }
 
-      return sendResponse(res, userId, { embeds: [embed] });
+      return await sendResponse(res, userId, { embeds: [embed] });
     }
 
     // settings command
     if (name === 'settings') {
       const userId = req.body.member?.user?.id || req.body.user?.id;
-      const currentVisibility = getUserVisibility(userId);
+      const currentVisibility = await getUserVisibility(userId);
       const otherVisibility = currentVisibility === 'ephemeral' ? 'public' : 'ephemeral';
 
       return res.send({
