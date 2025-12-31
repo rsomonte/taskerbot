@@ -177,6 +177,7 @@ const HELP_COMMAND = {
         { name: 'GitHub', value: 'GitHub' },
         { name: 'settings', value: 'settings' },
         { name: 'help', value: 'help' },
+        { name: 'Dashboard', value: 'Dashboard' },
       ],
     },
   ],

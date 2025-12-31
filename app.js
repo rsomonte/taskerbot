@@ -7,13 +7,22 @@ import {
   verifyKeyMiddleware,
 } from 'discord-interactions';
 import { createClient } from "@libsql/client";
-import { Client, GatewayIntentBits, Partials } from 'discord.js';
+import { Client, GatewayIntentBits, Partials, ActivityType } from 'discord.js';
 
 // --- Discord.js client for DMs ---
 const botClient = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.DirectMessages],
   partials: [Partials.Channel],
 });
+
+botClient.once('ready', () => {
+  console.log(`Logged in as ${botClient.user.tag}!`);
+  botClient.user.setActivity({
+    name: 'Manage your objectives at https://taskerbot-dashboard.vercel.app/',
+    type: ActivityType.Custom,
+  });
+});
+
 botClient.login(process.env.DISCORD_TOKEN);
 
 // --- Express app setup ---
@@ -40,8 +49,10 @@ await client.execute(`
 `);
 await client.execute(`
   CREATE TABLE IF NOT EXISTS user_settings (
-    userId TEXT PRIMARY KEY,
-    visibility TEXT DEFAULT 'ephemeral'
+    userId TEXT NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT,
+    PRIMARY KEY (userId, key)
   )
 `);
 
@@ -118,17 +129,17 @@ async function renameObjective(userId, currentName, newName) {
  */
 async function getUserVisibility(userId) {
   const result = await client.execute({
-    sql: 'SELECT visibility FROM user_settings WHERE userId = ?',
-    args: [userId],
+    sql: 'SELECT value FROM user_settings WHERE userId = ? AND key = ?',
+    args: [userId, 'visibility'],
   });
   const setting = result.rows[0];
-  return setting ? setting.visibility : 'ephemeral';
+  return setting ? setting.value : 'ephemeral';
 }
 
 async function setUserVisibility(userId, visibility) {
   await client.execute({
-    sql: 'INSERT INTO user_settings (userId, visibility) VALUES (?, ?) ON CONFLICT(userId) DO UPDATE SET visibility=excluded.visibility',
-    args: [userId, visibility],
+    sql: 'INSERT INTO user_settings (userId, key, value) VALUES (?, ?, ?) ON CONFLICT(userId, key) DO UPDATE SET value=excluded.value',
+    args: [userId, 'visibility', visibility],
   });
 }
 
@@ -556,6 +567,11 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
           title = 'GitHub Repository';
           description = 'Check out the source code for this bot on [GitHub](https://github.com/rsomonte/taskerbot)!';
           url = 'https://github.com/rsomonte/taskerbot'; 
+          break;
+        case 'Dashboard':
+          title = 'Tasker Bot Dashboard';
+          description = 'Manage your objectives from the official website: https://taskerbot-dashboard.vercel.app/!';
+          url = 'https://taskerbot-dashboard.vercel.app/';
           break;
       }
 
